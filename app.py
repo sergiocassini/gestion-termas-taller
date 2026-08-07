@@ -6,6 +6,26 @@ from datetime import datetime
 # Configuración de página adaptable a teléfonos
 st.set_page_config(page_title="Gestión Termas & Taller", page_icon="🏪", layout="wide")
 
+# --- CONTROL DE ACCESO CON PIN / CONTRASEÑA ---
+PIN_CORRECTO = "2017"  # 👈 CAMBIÁ ESTA CLAVE POR LA QUE VOS QUIERAS
+
+if "autenticado" not in st.session_state:
+    st.session_state["autenticado"] = False
+
+def verificar_pin():
+    if st.session_state["input_pin"] == PIN_CORRECTO:
+        st.session_state["autenticado"] = True
+    else:
+        st.error("🔒 PIN / Contraseña incorrecta")
+
+if not st.session_state["autenticado"]:
+    st.title("🔒 Acceso Restringido")
+    st.subheader("Control de Negocio: Termas & Taller")
+    
+    st.text_input("Ingresá el PIN de acceso:", type="password", key="input_pin", on_change=verificar_pin)
+    st.button("Ingresar", on_click=verificar_pin, use_container_width=True)
+    st.stop()  # Detiene la ejecución del resto del programa si no ingresó el PIN correcto
+
 # --- CONEXIÓN A SUPABASE ---
 def get_connection():
     return psycopg2.connect(
@@ -38,7 +58,7 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS gachapon_premios (
             id SERIAL PRIMARY KEY,
-            numero INT,
+            numero VARCHAR(50),
             nombre VARCHAR(255) UNIQUE NOT NULL,
             impresos INT DEFAULT 0,
             stock_deposito INT DEFAULT 0,
@@ -169,7 +189,7 @@ with tab_stock:
 # -----------------------------------------------------------------------------
 with tab_gachapon:
     st.header("🎰 Premios Máquina Gachapon")
-    premios = consulta("SELECT id, numero, nombre, stock_deposito, en_maquina FROM gachapon_premios ORDER BY numero ASC")
+    premios = consulta("SELECT id, numero, nombre, stock_deposito, en_maquina FROM gachapon_premios ORDER BY id ASC")
     if premios:
         df_gachapon = pd.DataFrame(premios, columns=["ID", "Nº", "Premio", "En Depósito", "En Máquina"])
         st.dataframe(df_gachapon[["Nº", "Premio", "En Máquina", "En Depósito"]], use_container_width=True)
