@@ -309,56 +309,12 @@ with tab_caja:
         st.caption("Aún no se han registrado ventas en ferias.")
 
 # -----------------------------------------------------------------------------
-# 5. INVENTARIO (ALTAS, IMPORTADOR EXCEL, EDICIÓN DE PRECIOS Y ARQUEOS)
+# 5. INVENTARIO
 # -----------------------------------------------------------------------------
 with tab_stock:
     st.header("📦 Inventario")
     
-    # 1. IMPORTADOR MASIVO DESDE EXCEL
-    with st.expander("📥 Importar / Actualizar desde Excel (Stock Termas.xlsx)", expanded=False):
-        st.write("Subí tu archivo Excel para actualizar automáticamente productos, precios y stocks.")
-        archivo_excel = st.file_uploader("Seleccionar planilla (.xlsx o .xls):", type=["xlsx", "xls"], key="excel_uploader")
-        
-        if archivo_excel is not None:
-            if st.button("🚀 Sincronizar Base de Datos con Excel", use_container_width=True):
-                try:
-                    xls = pd.ExcelFile(archivo_excel)
-                    cargados = 0
-                    
-                    for sheet in xls.sheet_names:
-                        df_sheet = pd.read_excel(archivo_excel, sheet_name=sheet)
-                        df_sheet.columns = [str(c).strip().lower() for c in df_sheet.columns]
-                        
-                        col_nombre = next((c for c in df_sheet.columns if 'producto' in c or 'nombre' in c or 'item' in c), None)
-                        col_precio = next((c for c in df_sheet.columns if 'precio' in c or 'valor' in c), None)
-                        col_stock = next((c for c in df_sheet.columns if 'stock' in c or 'cantidad' in c or 'cant' in c), None)
-                        col_cat = next((c for c in df_sheet.columns if 'categoria' in c or 'categoría' in c or 'grupo' in c), None)
-                        
-                        if col_nombre:
-                            for _, r in df_sheet.dropna(subset=[col_nombre]).iterrows():
-                                p_nombre = str(r[col_nombre]).strip()
-                                p_precio = float(r[col_precio]) if (col_precio and pd.notnull(r[col_precio])) else 0.0
-                                p_stock = int(r[col_stock]) if (col_stock and pd.notnull(r[col_stock])) else 0
-                                p_cat = str(r[col_cat]).strip() if (col_cat and pd.notnull(r[col_cat])) else "General"
-                                p_grupo = obtener_grupo(p_cat, p_nombre)
-                                
-                                consulta("""
-                                    INSERT INTO productos (nombre, categoria, grupo, precio, stock)
-                                    VALUES (%s, %s, %s, %s, %s)
-                                    ON CONFLICT (nombre) DO UPDATE SET
-                                        precio = EXCLUDED.precio,
-                                        stock = EXCLUDED.stock,
-                                        categoria = EXCLUDED.categoria,
-                                        grupo = EXCLUDED.grupo;
-                                """, (p_nombre, p_cat, p_grupo, p_precio, p_stock), fetch=False)
-                                cargados += 1
-                                
-                    st.success(f"¡Éxito! Se sincronizaron {cargados} productos desde el archivo Excel.")
-                    st.rerun()
-                except Exception as ex:
-                    st.error(f"Error al procesar el archivo Excel: {ex}")
-
-    # 2. ALTAS DIRECCIONADAS MANUALES
+    # 1. ALTAS DIRECCIONADAS MANUALES
     with st.expander("➕ Dar de Alta Nuevo Producto o Premio Gachapon", expanded=False):
         tipo_alta = st.radio("¿Qué querés registrar?", ["Producto General", "Premio de Gachapon"], horizontal=True)
         
@@ -426,7 +382,7 @@ with tab_stock:
                 else:
                     st.warning("Completá el nombre del personaje y la colección.")
 
-    # 3. CAMBIO DE PRECIOS
+    # 2. CAMBIO DE PRECIOS
     with st.expander("✏️ Cambiar Precios (Productos o Fichas Gachapon)", expanded=False):
         tipo_precio = st.radio("Editar precio de:", ["Producto General", "Ficha de Colección Gachapon"], horizontal=True)
         
@@ -449,6 +405,80 @@ with tab_stock:
                     consulta("UPDATE gachapon_premios SET precio_ficha = %s WHERE coleccion = %s", (pf_nuevo, col_e), fetch=False)
                     st.success(f"¡Precio de ficha para {col_e} actualizado a ${pf_nuevo:,.0f}!")
                     st.rerun()
+
+    # 3. IMPORTADOR MASIVO DESDE EXCEL
+    with st.expander("📥 Importar / Actualizar desde Excel (Stock Termas.xlsx)", expanded=False):
+        st.write("Subí tu archivo Excel para actualizar automáticamente productos generales y colecciones de Gachapon.")
+        archivo_excel = st.file_uploader("Seleccionar planilla (.xlsx o .xls):", type=["xlsx", "xls"], key="excel_uploader")
+        
+        if archivo_excel is not None:
+            if st.button("🚀 Sincronizar Base de Datos con Excel", use_container_width=True):
+                try:
+                    xls = pd.ExcelFile(archivo_excel)
+                    cargados_prods = 0
+                    cargados_gach = 0
+                    
+                    for sheet in xls.sheet_names:
+                        df_sheet = pd.read_excel(archivo_excel, sheet_name=sheet)
+                        df_sheet.columns = [str(c).strip().lower() for c in df_sheet.columns]
+                        
+                        # Si la hoja corresponde a Gachapon (Zookis, Minecraft, etc.)
+                        is_gachapon = any(k in sheet.lower() for k in ['zooki', 'minecraft', 'gachapon', 'premio']) or \
+                                      any('impresos' in c or 'deposito' in c or 'maquina' in c for c in df_sheet.columns)
+                        
+                        if is_gachapon:
+                            col_nom = next((c for c in df_sheet.columns if 'nombre' in c or 'premio' in c or 'personaje' in c), None)
+                            col_num = next((c for c in df_sheet.columns if 'numero' in c or 'nº' in c or 'num' in c or 'id' in c), None)
+                            col_dep = next((c for c in df_sheet.columns if 'deposito' in c or 'depósito' in c or 'stock' in c), None)
+                            col_maq = next((c for c in df_sheet.columns if 'maquina' in c or 'máquina' in c), None)
+                            
+                            if col_nom:
+                                for _, r in df_sheet.dropna(subset=[col_nom]).iterrows():
+                                    g_nom = str(r[col_nom]).strip()
+                                    g_num = str(r[col_num]).strip() if (col_num and pd.notnull(r[col_num])) else ""
+                                    g_dep = int(r[col_dep]) if (col_dep and pd.notnull(r[col_dep])) else 0
+                                    g_maq = int(r[col_maq]) if (col_maq and pd.notnull(r[col_maq])) else 0
+                                    
+                                    consulta("""
+                                        INSERT INTO gachapon_premios (numero, nombre, coleccion, stock_deposito, en_maquina)
+                                        VALUES (%s, %s, %s, %s, %s)
+                                        ON CONFLICT (nombre) DO UPDATE SET
+                                            numero = EXCLUDED.numero,
+                                            coleccion = EXCLUDED.coleccion,
+                                            stock_deposito = EXCLUDED.stock_deposito,
+                                            en_maquina = EXCLUDED.en_maquina;
+                                    """, (g_num, g_nom, sheet, g_dep, g_maq), fetch=False)
+                                    cargados_gach += 1
+                        else:
+                            # Hoja de Productos Generales
+                            col_nombre = next((c for c in df_sheet.columns if 'producto' in c or 'nombre' in c or 'item' in c), None)
+                            col_precio = next((c for c in df_sheet.columns if 'precio' in c or 'valor' in c), None)
+                            col_stock = next((c for c in df_sheet.columns if 'stock' in c or 'cantidad' in c or 'cant' in c), None)
+                            col_cat = next((c for c in df_sheet.columns if 'categoria' in c or 'categoría' in c or 'grupo' in c), None)
+                            
+                            if col_nombre:
+                                for _, r in df_sheet.dropna(subset=[col_nombre]).iterrows():
+                                    p_nombre = str(r[col_nombre]).strip()
+                                    p_precio = float(r[col_precio]) if (col_precio and pd.notnull(r[col_precio])) else 0.0
+                                    p_stock = int(r[col_stock]) if (col_stock and pd.notnull(r[col_stock])) else 0
+                                    p_cat = str(r[col_cat]).strip() if (col_cat and pd.notnull(r[col_cat])) else "General"
+                                    p_grupo = obtener_grupo(p_cat, p_nombre)
+                                    
+                                    consulta("""
+                                        INSERT INTO productos (nombre, categoria, grupo, precio, stock)
+                                        VALUES (%s, %s, %s, %s, %s)
+                                        ON CONFLICT (nombre) DO UPDATE SET
+                                            precio = EXCLUDED.precio,
+                                            stock = EXCLUDED.stock,
+                                            categoria = EXCLUDED.categoria,
+                                            grupo = EXCLUDED.grupo;
+                                    """, (p_nombre, p_cat, p_grupo, p_precio, p_stock), fetch=False)
+                                    cargados_prods += 1
+                                
+                    st.success(f"¡Éxito! Se actualizaron {cargados_prods} productos generales y {cargados_gach} premios/personajes de Gachapon.")
+                    st.rerun()
+                except Exception as ex:
+                    st.error(f"Error al procesar el archivo Excel: {ex}")
 
     # 4. ARQUEO DE MAQUINA GACHAPON
     with st.expander("🔍 Arqueo y Recompuesto de Máquina Gachapon", expanded=False):
