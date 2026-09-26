@@ -8,7 +8,7 @@ import base64
 st.set_page_config(page_title="Gestión Termas & Taller", page_icon="🏪", layout="wide")
 
 # --- CONTROL DE ACCESO CON PIN ---
-PIN_CORRECTO = "2017"  # Clave de acceso actualizada
+PIN_CORRECTO = "2017"
 
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
@@ -45,7 +45,7 @@ def consulta(query, params=(), fetch=True):
     conn.close()
     return res
 
-# --- INICIALIZACIÓN Y MIGRACIÓN AUTO-CORRECTIVA ---
+# --- INICIALIZACIÓN DE BASE DE DATOS ---
 def init_db():
     try:
         consulta("ALTER TABLE productos ADD COLUMN IF NOT EXISTS imagen_url TEXT;", fetch=False)
@@ -68,7 +68,7 @@ def init_db():
             id SERIAL PRIMARY KEY,
             numero VARCHAR(50),
             nombre VARCHAR(255) UNIQUE NOT NULL,
-            coleccion VARCHAR(100) DEFAULT 'Zookis',
+            coleccion VARCHAR(100) DEFAULT 'Zooki',
             impresos INT DEFAULT 0,
             stock_deposito INT DEFAULT 0,
             en_maquina INT DEFAULT 0,
@@ -97,7 +97,7 @@ try:
 except Exception as e:
     st.error(f"Conectando con la base de datos... ({e})")
 
-# --- APLICACIÓN DE MAPEO AUTOMÁTICO DE CATEGORÍAS/GRUPOS ---
+# --- MAPEO DE GRUPOS ---
 def obtener_grupo(categoria):
     cat = str(categoria).lower()
     if 'llavero' in cat or 'dije' in cat or 'pin' in cat or 'iman' in cat:
@@ -111,23 +111,23 @@ def obtener_grupo(categoria):
     else:
         return "📦 Varios y Novedades"
 
-# --- INTERFAZ PRINCIPAL ---
+# --- INTERFAZ PRINCIPAL (MENÚ SIMPLIFICADO) ---
 st.title("🏪 Control Termas & Taller")
 
-tab_termas, tab_taller, tab_gachapon, tab_stock, tab_caja = st.tabs([
+tab_termas, tab_taller, tab_stock, tab_caja = st.tabs([
     "🛒 Ventas Termas", 
     "🛠️ Ventas Taller", 
-    "🎰 Gachapon & Colecciones", 
-    "📦 Inventario & Fotos", 
+    "📦 Inventario", 
     "💰 Caja"
 ])
 
 # -----------------------------------------------------------------------------
-# 1. VENTAS TERMAS (CATÁLOGO VISUAL POR GRUPOS)
+# 1. VENTAS TERMAS (INCLUYE CÁTALOGO Y GACHAPON)
 # -----------------------------------------------------------------------------
 with tab_termas:
     st.header("🛒 Ventas Mostrador Termas")
     
+    # BUSCADOR RÁPIDO
     busqueda = st.text_input("🔍 Buscador rápido de producto (nombre o categoría):", key="busqueda_termas")
     
     prods = consulta("SELECT id, nombre, categoria, precio, stock, imagen_url FROM productos ORDER BY nombre ASC")
@@ -145,7 +145,7 @@ with tab_termas:
             grupos_unicos = ["🔑 Llaveros, Pines y Dijes", "🧩 Juguetes y Fidgets", "🗿 Figuras y Funkos", "🏠 Hogar y Deco", "📦 Varios y Novedades"]
             grupos_mostrar = {g: df_prods[df_prods['grupo'] == g] for g in grupos_unicos if not df_prods[df_prods['grupo'] == g].empty}
 
-        # Renderizado de grupos
+        # Renderizado de grupos de productos
         for nombre_grupo, df_g in grupos_mostrar.items():
             with st.expander(f"{nombre_grupo} ({len(df_g)} artículos)", expanded=True if busqueda else False):
                 cols = st.columns(3)
@@ -178,6 +178,51 @@ with tab_termas:
     else:
         st.info("Aún no hay productos cargados en el inventario.")
 
+    # SECTION GACHAPON INTEGRADA DENTRO DE VENTAS TERMAS
+    with st.expander("🎰 Gachapon", expanded=False):
+        # Venta rápida de fichas
+        c_f1, c_f2 = st.columns([2, 1])
+        with c_f1:
+            cant_fichas = st.number_input("Cantidad Fichas Gachapon", min_value=1, value=1, key="f_gachapon")
+        with c_f2:
+            st.write("")
+            if st.button("🎟️ Vender Ficha/s", use_container_width=True):
+                res_p = consulta("SELECT valor FROM config WHERE clave='precio_ficha_gachapon'")
+                p_unit = float(res_p[0][0]) if res_p else 2000.0
+                subt = cant_fichas * p_unit
+                consulta("""
+                    INSERT INTO ventas (origen, item_tipo, item_nombre, cantidad, precio_unitario, subtotal, fecha) 
+                    VALUES ('TERMAS', 'FICHA_GACHAPON', 'Ficha Gachapon', %s, %s, %s, %s)
+                """, (cant_fichas, p_unit, subt, datetime.now()), fetch=False)
+                st.success(f"Vendido: {cant_fichas} ficha/s (${subt:,.0f})")
+
+        st.divider()
+
+        # Solapas para 1- Zooki y 2- Minecraft
+        gach_tab1, gach_tab2 = st.tabs(["1- Zooki", "2- Minecraft"])
+        
+        premios_all = consulta("SELECT id, numero, nombre, coleccion, stock_deposito, en_maquina FROM gachapon_premios ORDER BY id ASC")
+        
+        with gach_tab1:
+            st.subheader("Colección Zooki")
+            if premios_all:
+                zookis = [p for p in premios_all if 'zooki' in str(p[3]).lower() or 'zookie' in str(p[3]).lower() or not p[3]]
+                if zookis:
+                    df_zooki = pd.DataFrame(zookis, columns=["ID", "Nº", "Premio", "Colección", "En Depósito", "En Máquina"])
+                    st.dataframe(df_zooki[["Nº", "Premio", "En Máquina", "En Depósito"]], use_container_width=True)
+                else:
+                    st.caption("No hay premios de Zooki registrados.")
+        
+        with gach_tab2:
+            st.subheader("Colección Minecraft")
+            if premios_all:
+                mine = [p for p in premios_all if 'minecraft' in str(p[3]).lower()]
+                if mine:
+                    df_mine = pd.DataFrame(mine, columns=["ID", "Nº", "Premio", "Colección", "En Depósito", "En Máquina"])
+                    st.dataframe(df_mine[["Nº", "Premio", "En Máquina", "En Depósito"]], use_container_width=True)
+                else:
+                    st.caption("No hay premios de Minecraft registrados.")
+
 # -----------------------------------------------------------------------------
 # 2. VENTAS TALLER
 # -----------------------------------------------------------------------------
@@ -208,39 +253,10 @@ with tab_taller:
             st.rerun()
 
 # -----------------------------------------------------------------------------
-# 3. GACHAPON & COLECCIONES
-# -----------------------------------------------------------------------------
-with tab_gachapon:
-    st.header("🎰 Máquina Gachapon & Colecciones")
-    
-    st.subheader("🎟️ Venta de Ficha Gachapon")
-    c_f1, c_f2 = st.columns([2, 1])
-    with c_f1:
-        cant_fichas = st.number_input("Cantidad Fichas", min_value=1, value=1, key="f_gachapon")
-    with c_f2:
-        st.write("")
-        if st.button("🎟️ Vender Ficha/s", use_container_width=True):
-            res_p = consulta("SELECT valor FROM config WHERE clave='precio_ficha_gachapon'")
-            p_unit = float(res_p[0][0]) if res_p else 2000.0
-            subt = cant_fichas * p_unit
-            consulta("""
-                INSERT INTO ventas (origen, item_tipo, item_nombre, cantidad, precio_unitario, subtotal, fecha) 
-                VALUES ('TERMAS', 'FICHA_GACHAPON', 'Ficha Gachapon', %s, %s, %s, %s)
-            """, (cant_fichas, p_unit, subt, datetime.now()), fetch=False)
-            st.success(f"Vendido: {cant_fichas} ficha/s (${subt:,.0f})")
-
-    st.divider()
-    st.subheader("📦 Estado de Premios y Muñecos")
-    premios = consulta("SELECT id, numero, nombre, stock_deposito, en_maquina FROM gachapon_premios ORDER BY id ASC")
-    if premios:
-        df_gachapon = pd.DataFrame(premios, columns=["ID", "Nº", "Premio", "En Depósito", "En Máquina"])
-        st.dataframe(df_gachapon[["Nº", "Premio", "En Máquina", "En Depósito"]], use_container_width=True)
-
-# -----------------------------------------------------------------------------
-# 4. INVENTARIO & SUBIDA DE FOTOS
+# 3. INVENTARIO
 # -----------------------------------------------------------------------------
 with tab_stock:
-    st.header("📦 Inventario y Carga de Fotos")
+    st.header("📦 Inventario")
     
     st.subheader("🖼️ Asignar / Cambiar Foto a un Producto")
     if prods:
@@ -267,7 +283,7 @@ with tab_stock:
         st.dataframe(df_stock, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# 5. CAJA
+# 4. CAJA
 # -----------------------------------------------------------------------------
 with tab_caja:
     st.header("💰 Estado de Caja")
