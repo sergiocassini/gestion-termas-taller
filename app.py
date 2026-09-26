@@ -45,11 +45,14 @@ def consulta(query, params=(), fetch=True):
     conn.close()
     return res
 
-# --- INICIALIZACIÓN DE BASE DE DATOS ---
+# --- INICIALIZACIÓN Y AUTO-MIGRACIÓN ---
 def init_db():
     try:
         consulta("ALTER TABLE productos ADD COLUMN IF NOT EXISTS imagen_url TEXT;", fetch=False)
+        consulta("ALTER TABLE productos ADD COLUMN IF NOT EXISTS grupo VARCHAR(100) DEFAULT '📦 Varios y Novedades';", fetch=False)
         consulta("ALTER TABLE productos ADD COLUMN IF NOT EXISTS subgrupo VARCHAR(100) DEFAULT 'Varios';", fetch=False)
+        consulta("ALTER TABLE gachapon_premios ADD COLUMN IF NOT EXISTS coleccion VARCHAR(100) DEFAULT 'Zooki';", fetch=False)
+        consulta("ALTER TABLE gachapon_premios ADD COLUMN IF NOT EXISTS precio_ficha NUMERIC DEFAULT 2000;", fetch=False)
     except Exception:
         pass
 
@@ -58,6 +61,7 @@ def init_db():
             id SERIAL PRIMARY KEY,
             nombre VARCHAR(255) UNIQUE NOT NULL,
             categoria VARCHAR(100) DEFAULT 'General',
+            grupo VARCHAR(100) DEFAULT '📦 Varios y Novedades',
             subgrupo VARCHAR(100) DEFAULT 'Varios',
             precio NUMERIC DEFAULT 0,
             stock INT DEFAULT 0,
@@ -72,7 +76,7 @@ def init_db():
             impresos INT DEFAULT 0,
             stock_deposito INT DEFAULT 0,
             en_maquina INT DEFAULT 0,
-            precio_venta_directa NUMERIC DEFAULT 0,
+            precio_ficha NUMERIC DEFAULT 2000,
             imagen_url TEXT
         );
         CREATE TABLE IF NOT EXISTS ventas (
@@ -111,7 +115,7 @@ def obtener_grupo(categoria):
     else:
         return "📦 Varios y Novedades"
 
-# --- INTERFAZ PRINCIPAL (MENÚ SIMPLIFICADO) ---
+# --- INTERFAZ PRINCIPAL ---
 st.title("🏪 Control Termas & Taller")
 
 tab_termas, tab_taller, tab_stock, tab_caja = st.tabs([
@@ -122,19 +126,18 @@ tab_termas, tab_taller, tab_stock, tab_caja = st.tabs([
 ])
 
 # -----------------------------------------------------------------------------
-# 1. VENTAS TERMAS (INCLUYE CÁTALOGO Y GACHAPON)
+# 1. VENTAS TERMAS
 # -----------------------------------------------------------------------------
 with tab_termas:
     st.header("🛒 Ventas Mostrador Termas")
     
-    # BUSCADOR RÁPIDO
     busqueda = st.text_input("🔍 Buscador rápido de producto (nombre o categoría):", key="busqueda_termas")
     
-    prods = consulta("SELECT id, nombre, categoria, precio, stock, imagen_url FROM productos ORDER BY nombre ASC")
+    prods = consulta("SELECT id, nombre, categoria, precio, stock, imagen_url, grupo FROM productos ORDER BY nombre ASC")
     
     if prods:
-        df_prods = pd.DataFrame(prods, columns=["id", "nombre", "categoria", "precio", "stock", "imagen_url"])
-        df_prods['grupo'] = df_prods['categoria'].apply(obtener_grupo)
+        df_prods = pd.DataFrame(prods, columns=["id", "nombre", "categoria", "precio", "stock", "imagen_url", "grupo"])
+        df_prods['grupo_final'] = df_prods.apply(lambda r: r['grupo'] if r['grupo'] else obtener_grupo(r['categoria']), axis=1)
         
         if busqueda:
             df_filtrado = df_prods[df_prods['nombre'].str.contains(busqueda, case=False, na=False) | 
@@ -142,10 +145,9 @@ with tab_termas:
             st.subheader(f"Resultados de búsqueda ({len(df_filtrado)})")
             grupos_mostrar = {"🔍 Resultados": df_filtrado}
         else:
-            grupos_unicos = ["🔑 Llaveros, Pines y Dijes", "🧩 Juguetes y Fidgets", "🗿 Figuras y Funkos", "🏠 Hogar y Deco", "📦 Varios y Novedades"]
-            grupos_mostrar = {g: df_prods[df_prods['grupo'] == g] for g in grupos_unicos if not df_prods[df_prods['grupo'] == g].empty}
+            grupos_unicos = df_prods['grupo_final'].unique()
+            grupos_mostrar = {g: df_prods[df_prods['grupo_final'] == g] for g in grupos_unicos if not df_prods[df_prods['grupo_final'] == g].empty}
 
-        # Renderizado de grupos de productos
         for nombre_grupo, df_g in grupos_mostrar.items():
             with st.expander(f"{nombre_grupo} ({len(df_g)} artículos)", expanded=True if busqueda else False):
                 cols = st.columns(3)
@@ -178,50 +180,43 @@ with tab_termas:
     else:
         st.info("Aún no hay productos cargados en el inventario.")
 
-    # SECTION GACHAPON INTEGRADA DENTRO DE VENTAS TERMAS
+    # MÓDULO GACHAPON
     with st.expander("🎰 Gachapon", expanded=False):
-        # Venta rápida de fichas
-        c_f1, c_f2 = st.columns([2, 1])
-        with c_f1:
-            cant_fichas = st.number_input("Cantidad Fichas Gachapon", min_value=1, value=1, key="f_gachapon")
-        with c_f2:
-            st.write("")
-            if st.button("🎟️ Vender Ficha/s", use_container_width=True):
-                res_p = consulta("SELECT valor FROM config WHERE clave='precio_ficha_gachapon'")
-                p_unit = float(res_p[0][0]) if res_p else 2000.0
-                subt = cant_fichas * p_unit
-                consulta("""
-                    INSERT INTO ventas (origen, item_tipo, item_nombre, cantidad, precio_unitario, subtotal, fecha) 
-                    VALUES ('TERMAS', 'FICHA_GACHAPON', 'Ficha Gachapon', %s, %s, %s, %s)
-                """, (cant_fichas, p_unit, subt, datetime.now()), fetch=False)
-                st.success(f"Vendido: {cant_fichas} ficha/s (${subt:,.0f})")
+        premios_all = consulta("SELECT id, numero, nombre, coleccion, stock_deposito, en_maquina, precio_ficha FROM gachapon_premios ORDER BY id ASC")
+        
+        if premios_all:
+            df_gach = pd.DataFrame(premios_all, columns=["ID", "Nº", "Premio", "Colección", "En Depósito", "En Máquina", "Precio Ficha"])
+            df_gach['Colección'] = df_gach['Colección'].fillna('General')
+            colecciones_unicas = sorted(df_gach['Colección'].unique())
+            
+            st.subheader("🎟️ Venta de Ficha Gachapon")
+            col_sel = st.selectbox("Seleccionar Colección:", colecciones_unicas)
+            
+            p_ficha = float(df_gach[df_gach['Colección'] == col_sel]['Precio Ficha'].iloc[0])
+            st.caption(f"Precio actual por ficha ({col_sel}): **${p_ficha:,.0f}**")
+            
+            c_f1, c_f2 = st.columns([2, 1])
+            with c_f1:
+                cant_fichas = st.number_input("Cantidad de Fichas:", min_value=1, value=1, key="cant_f_v")
+            with c_f2:
+                st.write("")
+                if st.button("🎟️ Vender Ficha/s", use_container_width=True):
+                    subt = cant_fichas * p_ficha
+                    consulta("""
+                        INSERT INTO ventas (origen, item_tipo, item_nombre, cantidad, precio_unitario, subtotal, fecha) 
+                        VALUES ('TERMAS', 'FICHA_GACHAPON', %s, %s, %s, %s, %s)
+                    """, (f"Ficha Gachapon ({col_sel})", cant_fichas, p_ficha, subt, datetime.now()), fetch=False)
+                    st.success(f"Vendido: {cant_fichas} ficha/s {col_sel} (${subt:,.0f})")
 
-        st.divider()
-
-        # Solapas para 1- Zooki y 2- Minecraft
-        gach_tab1, gach_tab2 = st.tabs(["1- Zooki", "2- Minecraft"])
-        
-        premios_all = consulta("SELECT id, numero, nombre, coleccion, stock_deposito, en_maquina FROM gachapon_premios ORDER BY id ASC")
-        
-        with gach_tab1:
-            st.subheader("Colección Zooki")
-            if premios_all:
-                zookis = [p for p in premios_all if 'zooki' in str(p[3]).lower() or 'zookie' in str(p[3]).lower() or not p[3]]
-                if zookis:
-                    df_zooki = pd.DataFrame(zookis, columns=["ID", "Nº", "Premio", "Colección", "En Depósito", "En Máquina"])
-                    st.dataframe(df_zooki[["Nº", "Premio", "En Máquina", "En Depósito"]], use_container_width=True)
-                else:
-                    st.caption("No hay premios de Zooki registrados.")
-        
-        with gach_tab2:
-            st.subheader("Colección Minecraft")
-            if premios_all:
-                mine = [p for p in premios_all if 'minecraft' in str(p[3]).lower()]
-                if mine:
-                    df_mine = pd.DataFrame(mine, columns=["ID", "Nº", "Premio", "Colección", "En Depósito", "En Máquina"])
-                    st.dataframe(df_mine[["Nº", "Premio", "En Máquina", "En Depósito"]], use_container_width=True)
-                else:
-                    st.caption("No hay premios de Minecraft registrados.")
+            st.divider()
+            
+            tabs_colec = st.tabs([f"📦 {col}" for col in colecciones_unicas])
+            for index, col_nombre in enumerate(colecciones_unicas):
+                with tabs_colec[index]:
+                    sub_df = df_gach[df_gach['Colección'] == col_nombre]
+                    st.dataframe(sub_df[["Nº", "Premio", "En Máquina", "En Depósito"]], use_container_width=True)
+        else:
+            st.caption("No hay premios de Gachapon cargados aún.")
 
 # -----------------------------------------------------------------------------
 # 2. VENTAS TALLER
@@ -253,11 +248,126 @@ with tab_taller:
             st.rerun()
 
 # -----------------------------------------------------------------------------
-# 3. INVENTARIO
+# 3. INVENTARIO (ALTAS, EDICIÓN DE PRECIOS Y ARQUEOS)
 # -----------------------------------------------------------------------------
 with tab_stock:
     st.header("📦 Inventario")
     
+    # 1. ALTAS DIRECCIONADAS
+    with st.expander("➕ Dar de Alta Nuevo Producto o Premio Gachapon", expanded=False):
+        tipo_alta = st.radio("¿Qué querés registrar?", ["Producto General", "Premio de Gachapon"], horizontal=True)
+        
+        if tipo_alta == "Producto General":
+            col_a1, col_a2 = st.columns(2)
+            with col_a1:
+                nuevo_nombre = st.text_input("Nombre del Producto:")
+                nuevo_grupo = st.selectbox("Grupo:", [
+                    "🔑 Llaveros, Pines y Dijes",
+                    "🧩 Juguetes y Fidgets",
+                    "🗿 Figuras y Funkos",
+                    "🏠 Hogar y Deco",
+                    "📦 Varios y Novedades"
+                ])
+                nueva_cat = st.text_input("Categoría o Subgrupo (ej: Clubes, Anti-estrés):", value="General")
+            with col_a2:
+                nuevo_precio = st.number_input("Precio ($):", min_value=0.0, value=1000.0)
+                nuevo_stock = st.number_input("Stock Inicial:", min_value=0, value=1)
+            
+            if st.button("💾 Guardar Nuevo Producto", use_container_width=True):
+                if nuevo_nombre:
+                    try:
+                        consulta("""
+                            INSERT INTO productos (nombre, grupo, categoria, subgrupo, precio, stock) 
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (nuevo_nombre, nuevo_grupo, nueva_cat, nueva_cat, nuevo_precio, nuevo_stock), fetch=False)
+                        st.success(f"¡Producto '{nuevo_nombre}' agregado correctamente!")
+                        st.rerun()
+                    except Exception as ex:
+                        st.error(f"Error al guardar: {ex}")
+                else:
+                    st.warning("Escribí un nombre de producto.")
+
+        else: # Alta Gachapon
+            col_g1, col_g2 = st.columns(2)
+            with col_g1:
+                g_num = st.text_input("Número o Código de Premio:")
+                g_nombre = st.text_input("Nombre del Personaje/Premio:")
+                
+                colec_existentes = consulta("SELECT DISTINCT coleccion FROM gachapon_premios")
+                lista_c = [c[0] for c in colec_existentes if c[0]] if colec_existentes else ["Zooki", "Minecraft"]
+                
+                g_colec_sel = st.selectbox("Seleccionar Colección Existente:", lista_c + ["➕ Crear nueva colección..."])
+                if g_colec_sel == "➕ Crear nueva colección...":
+                    g_colec = st.text_input("Nombre de la NUEVA Colección (ej: Pokémon):")
+                    g_precio_ficha = st.number_input("Precio de la Ficha para esta colección ($):", min_value=0.0, value=2000.0)
+                else:
+                    g_colec = g_colec_sel
+                    g_precio_ficha = 2000.0
+            with col_g2:
+                g_en_maq = st.number_input("Cantidad Inicial en Máquina:", min_value=0, value=1)
+                g_en_dep = st.number_input("Cantidad Inicial en Depósito:", min_value=0, value=0)
+            
+            if st.button("💾 Guardar Personaje Gachapon", use_container_width=True):
+                if g_nombre and g_colec:
+                    try:
+                        consulta("""
+                            INSERT INTO gachapon_premios (numero, nombre, coleccion, en_maquina, stock_deposito, precio_ficha) 
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (g_num, g_nombre, g_colec, g_en_maq, g_en_dep, g_precio_ficha), fetch=False)
+                        st.success(f"¡Personaje '{g_nombre}' guardado en la colección '{g_colec}'!")
+                        st.rerun()
+                    except Exception as ex:
+                        st.error(f"Error al guardar: {ex}")
+                else:
+                    st.warning("Completá el nombre del personaje y la colección.")
+
+    # 2. CAMBIO DE PRECIOS
+    with st.expander("✏️ Cambiar Precios (Productos o Fichas Gachapon)", expanded=False):
+        tipo_precio = st.radio("Editar precio de:", ["Producto General", "Ficha de Colección Gachapon"], horizontal=True)
+        
+        if tipo_precio == "Producto General":
+            if prods:
+                p_edit = st.selectbox("Seleccionar Producto:", [p[1] for p in prods], key="sel_p_e")
+                val_act = [p[3] for p in prods if p[1] == p_edit][0]
+                p_nuevo = st.number_input(f"Nuevo Precio para {p_edit} ($):", value=float(val_act), min_value=0.0)
+                if st.button("💾 Actualizar Precio Producto", use_container_width=True):
+                    consulta("UPDATE productos SET precio = %s WHERE nombre = %s", (p_nuevo, p_edit), fetch=False)
+                    st.success(f"¡Precio de {p_edit} actualizado a ${p_nuevo:,.0f}!")
+                    st.rerun()
+        else:
+            colec_precios = consulta("SELECT DISTINCT coleccion, precio_ficha FROM gachapon_premios")
+            if colec_precios:
+                col_e = st.selectbox("Seleccionar Colección:", [c[0] for c in colec_precios], key="sel_c_e")
+                p_f_act = [c[1] for c in colec_precios if c[0] == col_e][0]
+                pf_nuevo = st.number_input(f"Nuevo Precio de Ficha para {col_e} ($):", value=float(p_f_act if p_f_act else 2000), min_value=0.0)
+                if st.button("💾 Actualizar Precio de Ficha", use_container_width=True):
+                    consulta("UPDATE gachapon_premios SET precio_ficha = %s WHERE coleccion = %s", (pf_nuevo, col_e), fetch=False)
+                    st.success(f"¡Precio de ficha para {col_e} actualizado a ${pf_nuevo:,.0f}!")
+                    st.rerun()
+
+    # 3. ARQUEO DE MAQUINA GACHAPON
+    with st.expander("🔍 Arqueo y Recompuesto de Máquina Gachapon", expanded=False):
+        premios_arq = consulta("SELECT id, numero, nombre, coleccion, en_maquina, stock_deposito FROM gachapon_premios ORDER BY coleccion, numero ASC")
+        if premios_arq:
+            df_arq = pd.DataFrame(premios_arq, columns=["id", "numero", "nombre", "coleccion", "en_maquina", "stock_deposito"])
+            col_arq_sel = st.selectbox("Seleccionar Colección para Auditar/Arquear:", df_arq['coleccion'].unique(), key="arq_col")
+            
+            df_col_arq = df_arq[df_arq['coleccion'] == col_arq_sel]
+            st.write("Ajustá la **Cantidad Real Actual en Máquina** observada al abrir la máquina:")
+            
+            for index, row in df_col_arq.iterrows():
+                ca1, ca2 = st.columns([3, 2])
+                with ca1:
+                    st.write(f"**Nº {row['numero']} - {row['nombre']}** (En dep: {row['stock_deposito']})")
+                with ca2:
+                    n_cant_maq = st.number_input(f"En Máquina:", min_value=0, value=int(row['en_maquina']), key=f"arq_n_{row['id']}")
+                    if n_cant_maq != int(row['en_maquina']):
+                        consulta("UPDATE gachapon_premios SET en_maquina = %s WHERE id = %s", (n_cant_maq, row['id']), fetch=False)
+            st.caption("Los cambios de stock se guardan en tiempo real al modificar los números.")
+
+    st.divider()
+
+    # 4. MÓDULO PARA CARGAR FOTO
     st.subheader("🖼️ Asignar / Cambiar Foto a un Producto")
     if prods:
         prod_foto = st.selectbox("Seleccionar producto para agregarle foto:", [p[1] for p in prods])
@@ -277,9 +387,9 @@ with tab_stock:
 
     st.divider()
     st.subheader("📋 Lista Completa de Stock")
-    prods_full = consulta("SELECT id, nombre, categoria, precio, stock, stock_minimo FROM productos ORDER BY nombre ASC")
+    prods_full = consulta("SELECT id, nombre, grupo, categoria, precio, stock FROM productos ORDER BY nombre ASC")
     if prods_full:
-        df_stock = pd.DataFrame(prods_full, columns=["ID", "Producto", "Categoría", "Precio", "Stock", "Stock Mínimo"])
+        df_stock = pd.DataFrame(prods_full, columns=["ID", "Producto", "Grupo", "Categoría", "Precio", "Stock"])
         st.dataframe(df_stock, use_container_width=True)
 
 # -----------------------------------------------------------------------------
