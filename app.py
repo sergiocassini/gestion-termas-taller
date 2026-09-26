@@ -45,8 +45,15 @@ def consulta(query, params=(), fetch=True):
     conn.close()
     return res
 
-# --- INICIALIZACIÓN DE TABLAS Y ESTRUCTURA ---
+# --- INICIALIZACIÓN Y MIGRACIÓN AUTO-CORRECTIVA ---
 def init_db():
+    # Agrega columnas si no existían previamente
+    try:
+        consulta("ALTER TABLE productos ADD COLUMN IF NOT EXISTS imagen_url TEXT;", fetch=False)
+        consulta("ALTER TABLE productos ADD COLUMN IF NOT EXISTS subgrupo VARCHAR(100) DEFAULT 'Varios';", fetch=False)
+    except Exception:
+        pass
+
     consulta("""
         CREATE TABLE IF NOT EXISTS productos (
             id SERIAL PRIMARY KEY,
@@ -140,15 +147,15 @@ with tab_termas:
             grupos_unicos = ["🔑 Llaveros, Pines y Dijes", "🧩 Juguetes y Fidgets", "🗿 Figuras y Funkos", "🏠 Hogar y Deco", "📦 Varios y Novedades"]
             grupos_mostrar = {g: df_prods[df_prods['grupo'] == g] for g in grupos_unicos if not df_prods[df_prods['grupo'] == g].empty}
 
-        # Renderizado de grupos por solapas o acordeones
+        # Renderizado de grupos
         for nombre_grupo, df_g in grupos_mostrar.items():
             with st.expander(f"{nombre_grupo} ({len(df_g)} artículos)", expanded=True if busqueda else False):
-                cols = st.columns(3) # 3 productos por fila (excelente vista en celular)
+                cols = st.columns(3) # 3 productos por fila
                 for idx, row in df_g.reset_index().iterrows():
                     col = cols[idx % 3]
                     with col:
                         st.markdown("---")
-                        # Muestra de foto o placeholder
+                        # Muestra de foto
                         if row['imagen_url']:
                             st.image(row['imagen_url'], use_container_width=True)
                         else:
@@ -171,6 +178,8 @@ with tab_termas:
                                 st.rerun()
                         else:
                             st.error("Sin Stock")
+    else:
+        st.info("Aún no hay productos cargados en el inventario.")
 
 # -----------------------------------------------------------------------------
 # 2. VENTAS TALLER
@@ -207,7 +216,6 @@ with tab_taller:
 with tab_gachapon:
     st.header("🎰 Máquina Gachapon & Colecciones")
     
-    # Venta de fichas
     st.subheader("🎟️ Venta de Ficha Gachapon")
     c_f1, c_f2 = st.columns([2, 1])
     with c_f1:
@@ -245,7 +253,6 @@ with tab_stock:
         archivo_imagen = st.file_uploader("Cargar imagen (JPG, PNG) desde la PC o tomar foto con el Celular:", type=["jpg", "png", "jpeg"])
         
         if archivo_imagen is not None:
-            # Convierte la imagen a formato Base64 para guardarla directamente
             bytes_data = archivo_imagen.getvalue()
             b64_img = f"data:image/jpeg;base64,{base64.b64encode(bytes_data).decode()}"
             st.image(bytes_data, width=150, caption="Vista previa de miniatura")
