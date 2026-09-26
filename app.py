@@ -8,7 +8,7 @@ import base64
 st.set_page_config(page_title="Gestión Termas & Taller", page_icon="🏪", layout="wide")
 
 # --- CONTROL DE ACCESO CON PIN ---
-PIN_CORRECTO = "1234"
+PIN_CORRECTO = "2017"
 
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
