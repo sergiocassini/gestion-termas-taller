@@ -8,7 +8,7 @@ import base64
 st.set_page_config(page_title="Gestión Termas & Taller", page_icon="🏪", layout="wide")
 
 # --- CONTROL DE ACCESO CON PIN ---
-PIN_CORRECTO = "2017"
+PIN_CORRECTO = "2017"  # Clave de acceso actualizada
 
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
@@ -47,7 +47,6 @@ def consulta(query, params=(), fetch=True):
 
 # --- INICIALIZACIÓN Y MIGRACIÓN AUTO-CORRECTIVA ---
 def init_db():
-    # Agrega columnas si no existían previamente
     try:
         consulta("ALTER TABLE productos ADD COLUMN IF NOT EXISTS imagen_url TEXT;", fetch=False)
         consulta("ALTER TABLE productos ADD COLUMN IF NOT EXISTS subgrupo VARCHAR(100) DEFAULT 'Varios';", fetch=False)
@@ -129,7 +128,6 @@ tab_termas, tab_taller, tab_gachapon, tab_stock, tab_caja = st.tabs([
 with tab_termas:
     st.header("🛒 Ventas Mostrador Termas")
     
-    # Buscador rápido predictivo
     busqueda = st.text_input("🔍 Buscador rápido de producto (nombre o categoría):", key="busqueda_termas")
     
     prods = consulta("SELECT id, nombre, categoria, precio, stock, imagen_url FROM productos ORDER BY nombre ASC")
@@ -150,18 +148,17 @@ with tab_termas:
         # Renderizado de grupos
         for nombre_grupo, df_g in grupos_mostrar.items():
             with st.expander(f"{nombre_grupo} ({len(df_g)} artículos)", expanded=True if busqueda else False):
-                cols = st.columns(3) # 3 productos por fila
+                cols = st.columns(3)
                 for idx, row in df_g.reset_index().iterrows():
                     col = cols[idx % 3]
                     with col:
                         st.markdown("---")
-                        # Muestra de foto
                         if row['imagen_url']:
                             st.image(row['imagen_url'], use_container_width=True)
                         else:
                             st.caption("📷 *Sin foto miniatura*")
                         
-                        st.bold(row['nombre'])
+                        st.markdown(f"**{row['nombre']}**")
                         st.caption(f"Categoría: {row['categoria']}")
                         st.subheader(f"${float(row['precio']):,.0f}")
                         st.write(f"Stock: **{row['stock']} un.**")
