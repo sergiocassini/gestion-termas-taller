@@ -334,10 +334,10 @@ with tab_stock:
                     "📦 Varios y Novedades"
                 ])
                 nueva_cat = st.text_input("Categoría o Subgrupo (ej: Clubes, Anti-estrés):", value="General")
-                nuevo_costo = st.number_input("Costo de Insumos ($):", min_value=0.0, value=0.0)
+                nuevo_costo = st.number_input("Costo de Insumos ($):", min_value=0.0, value=0.0, key="alta_costo_prod")
             with col_a2:
-                nuevo_precio = st.number_input("Precio de Venta ($):", min_value=0.0, value=1000.0)
-                nuevo_stock = st.number_input("Stock Inicial:", min_value=0, value=1)
+                nuevo_precio = st.number_input("Precio de Venta ($):", min_value=0.0, value=1000.0, key="alta_precio_prod")
+                nuevo_stock = st.number_input("Stock Inicial:", min_value=0, value=1, key="alta_stock_prod")
                 archivo_foto_alta = st.file_uploader("📷 Foto de Producto (opcional):", type=["jpg", "png", "jpeg"], key="foto_alta_prod")
             
             b64_img_alta = None
@@ -372,14 +372,14 @@ with tab_stock:
                 g_colec_sel = st.selectbox("Seleccionar Colección Existente:", lista_c + ["➕ Crear nueva colección..."])
                 if g_colec_sel == "➕ Crear nueva colección...":
                     g_colec = st.text_input("Nombre de la NUEVA Colección (ej: Pokémon):")
-                    g_precio_ficha = st.number_input("Precio de la Ficha para esta colección ($):", min_value=0.0, value=2000.0)
+                    g_precio_ficha = st.number_input("Precio de la Ficha para esta colección ($):", min_value=0.0, value=2000.0, key="alta_p_ficha")
                 else:
                     g_colec = g_colec_sel
                     g_precio_ficha = 2000.0
-                g_costo_ins = st.number_input("Costo de Insumos por Muñeco ($):", min_value=0.0, value=0.0)
+                g_costo_ins = st.number_input("Costo de Insumos por Muñeco ($):", min_value=0.0, value=0.0, key="alta_costo_gach")
             with col_g2:
-                g_en_maq = st.number_input("Cantidad Inicial en Máquina:", min_value=0, value=1)
-                g_en_dep = st.number_input("Cantidad Inicial en Depósito:", min_value=0, value=0)
+                g_en_maq = st.number_input("Cantidad Inicial en Máquina:", min_value=0, value=1, key="alta_maq_gach")
+                g_en_dep = st.number_input("Cantidad Inicial en Depósito:", min_value=0, value=0, key="alta_dep_gach")
                 archivo_foto_gach = st.file_uploader("📷 Foto del Personaje (opcional):", type=["jpg", "png", "jpeg"], key="foto_alta_gach")
 
             b64_img_gach = None
@@ -402,13 +402,13 @@ with tab_stock:
                 else:
                     st.warning("Completá el nombre del personaje y la colección.")
 
-    # 2. CAMBIO DE PRECIOS, COSTO DE INSUMOS Y STOCK
+    # 2. CAMBIO DE PRECIOS, COSTO DE INSUMOS Y STOCK (KEYS ÚNICAS AGREGADAS)
     with st.expander("✏️ Cambiar Precios, Costo de Insumos y Stock", expanded=False):
-        tipo_precio = st.radio("Editar datos de:", ["Producto General", "Ficha/Colección Gachapon"], horizontal=True)
+        tipo_precio = st.radio("Editar datos de:", ["Producto General", "Ficha/Colección Gachapon"], horizontal=True, key="edit_tipo_radio")
         
         if tipo_precio == "Producto General":
             if prods_db:
-                p_edit = st.selectbox("Seleccionar Producto:", [p[1] for p in prods_db], key="sel_p_e")
+                p_edit = st.selectbox("Seleccionar Producto:", [p[1] for p in prods_db], key="edit_sel_producto")
                 info_p = [p for p in prods_db if p[1] == p_edit][0]
                 val_act = info_p[3]
                 stock_act = info_p[4]
@@ -416,23 +416,23 @@ with tab_stock:
                 
                 cp1, cp2, cp3 = st.columns(3)
                 with cp1:
-                    p_nuevo = st.number_input(f"Precio de Venta ($):", value=float(val_act), min_value=0.0)
+                    p_nuevo = st.number_input(f"Precio de Venta ($):", value=float(val_act), min_value=0.0, key=f"edit_p_{p_edit}")
                 with cp2:
-                    c_nuevo = st.number_input(f"Costo de Insumos ($):", value=float(costo_act), min_value=0.0)
+                    c_nuevo = st.number_input(f"Costo de Insumos ($):", value=float(costo_act), min_value=0.0, key=f"edit_c_{p_edit}")
                 with cp3:
-                    s_nuevo = st.number_input(f"Stock Disponibles (un.):", value=int(stock_act), min_value=0)
+                    s_nuevo = st.number_input(f"Stock Disponible (un.):", value=int(stock_act), min_value=0, key=f"edit_s_{p_edit}")
                     
-                if st.button("💾 Actualizar Producto", use_container_width=True):
+                if st.button("💾 Actualizar Producto", use_container_width=True, key="btn_actualizar_prod"):
                     consulta("UPDATE productos SET precio = %s, costo_insumos = %s, stock = %s WHERE nombre = %s", (p_nuevo, c_nuevo, s_nuevo, p_edit), fetch=False)
                     st.success(f"¡Producto '{p_edit}' actualizado! Precio: ${p_nuevo:,.0f} | Insumos: ${c_nuevo:,.0f} | Stock: {s_nuevo} un.")
                     st.rerun()
         else:
             colec_precios = consulta("SELECT DISTINCT coleccion, precio_ficha FROM gachapon_premios")
             if colec_precios:
-                col_e = st.selectbox("Seleccionar Colección:", [c[0] for c in colec_precios], key="sel_c_e")
+                col_e = st.selectbox("Seleccionar Colección:", [c[0] for c in colec_precios], key="edit_sel_coleccion")
                 p_f_act = [c[1] for c in colec_precios if c[0] == col_e][0]
-                pf_nuevo = st.number_input(f"Nuevo Precio de Ficha para {col_e} ($):", value=float(p_f_act if p_f_act else 2000), min_value=0.0)
-                if st.button("💾 Actualizar Precio de Ficha", use_container_width=True):
+                pf_nuevo = st.number_input(f"Nuevo Precio de Ficha para {col_e} ($):", value=float(p_f_act if p_f_act else 2000), min_value=0.0, key=f"edit_pf_{col_e}")
+                if st.button("💾 Actualizar Precio de Ficha", use_container_width=True, key="btn_actualizar_ficha"):
                     consulta("UPDATE gachapon_premios SET precio_ficha = %s WHERE coleccion = %s", (pf_nuevo, col_e), fetch=False)
                     st.success(f"¡Precio de ficha para {col_e} actualizado a ${pf_nuevo:,.0f}!")
                     st.rerun()
