@@ -1,8 +1,12 @@
 import streamlit as st
 import pandas as pd
 import psycopg2
-from datetime import datetime
+from datetime import datetime, date
 import base64
+import io
+import openpyxl
+from openpyxl.drawing.image import Image as OpenPyXLEImage
+from PIL import Image as PILImage
 
 # Configuración de página adaptable a teléfonos
 st.set_page_config(page_title="Gestión Termas & Taller", page_icon="🏪", layout="wide")
@@ -14,7 +18,7 @@ if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
 
 def verificar_pin():
-    if st.session_state["input_pin"] == PIN_CORRECTO:
+    if str(st.session_state["input_pin"]).strip() == PIN_CORRECTO:
         st.session_state["autenticado"] = True
     else:
         st.error("🔒 PIN / Contraseña incorrecta")
@@ -45,7 +49,7 @@ def consulta(query, params=(), fetch=True):
     conn.close()
     return res
 
-# --- HELPER PARA MIGRAR / PROCESAR IMÁGENES DIVERSAS (PNG, JPG, ETC) ---
+# --- HELPER PARA PROCESAR IMÁGENES ---
 def procesar_archivo_imagen(archivo_subido):
     if archivo_subido is None:
         return None
@@ -63,6 +67,7 @@ def init_db():
         consulta("ALTER TABLE gachapon_premios ADD COLUMN IF NOT EXISTS coleccion VARCHAR(100) DEFAULT 'Zooki';", fetch=False)
         consulta("ALTER TABLE gachapon_premios ADD COLUMN IF NOT EXISTS precio_ficha NUMERIC DEFAULT 2000;", fetch=False)
         consulta("ALTER TABLE ventas ADD COLUMN IF NOT EXISTS nombre_feria VARCHAR(150) DEFAULT 'General';", fetch=False)
+        consulta("ALTER TABLE ventas ADD COLUMN IF NOT EXISTS id_cierre INT DEFAULT 0;", fetch=False)
     except Exception:
         pass
 
@@ -99,11 +104,17 @@ def init_db():
             precio_unitario NUMERIC NOT NULL,
             subtotal NUMERIC NOT NULL,
             fecha TIMESTAMP NOT NULL,
-            cerrado INT DEFAULT 0
+            cerrado INT DEFAULT 0,
+            id_cierre INT DEFAULT 0
         );
-        CREATE TABLE IF NOT EXISTS config (
-            clave VARCHAR(100) PRIMARY KEY,
-            valor VARCHAR(255) NOT NULL
+        CREATE TABLE IF NOT EXISTS cierres_caja (
+            id SERIAL PRIMARY KEY,
+            tipo_cierre VARCHAR(50) NOT NULL,
+            etiqueta_ciclo VARCHAR(150) NOT NULL,
+            total_recaudado NUMERIC NOT NULL,
+            total_operaciones INT NOT NULL,
+            fecha_inicio TIMESTAMP,
+            fecha_cierre TIMESTAMP NOT NULL
         );
     """, fetch=False)
 
@@ -228,7 +239,7 @@ tab_termas, tab_taller, tab_feria, tab_caja, tab_stock = st.tabs([
     "🛒 Ventas Termas", 
     "🛠️ Ventas Taller", 
     "🎪 Ventas Feria", 
-    "💰 Caja", 
+    "💰 Caja & Cierres", 
     "📦 Inventario"
 ])
 
@@ -264,8 +275,17 @@ with tab_feria:
         
         if st.button(f"🔒 Cerrar Feria '{nombre_feria_activa}' (${tot_feria_act:,.0f})", use_container_width=True):
             if tot_feria_act > 0:
-                consulta("UPDATE ventas SET cerrado = 1 WHERE origen='FERIA' AND nombre_feria = %s AND cerrado = 0", (nombre_feria_activa,), fetch=False)
-                st.success(f"¡Feria '{nombre_feria_activa}' cerrada exitosamente con un total de ${tot_feria_act:,.0f}!")
+                cnt_f = consulta("SELECT COUNT(*) FROM ventas WHERE origen='FERIA' AND nombre_feria = %s AND cerrado = 0", (nombre_feria_activa,))[0][0]
+                min_f = consulta("SELECT MIN(fecha) FROM ventas WHERE origen='FERIA' AND nombre_feria = %s AND cerrado = 0", (nombre_feria_activa,))[0][0]
+                
+                consulta("""
+                    INSERT INTO cierres_caja (tipo_cierre, etiqueta_ciclo, total_recaudado, total_operaciones, fecha_inicio, fecha_cierre)
+                    VALUES ('FERIA', %s, %s, %s, %s, %s)
+                """, (f"Feria: {nombre_feria_activa}", tot_feria_act, cnt_f, min_f, datetime.now()), fetch=False)
+                
+                id_nuevo_cierre = consulta("SELECT MAX(id) FROM cierres_caja")[0][0]
+                consulta("UPDATE ventas SET cerrado = 1, id_cierre = %s WHERE origen='FERIA' AND nombre_feria = %s AND cerrado = 0", (id_nuevo_cierre, nombre_feria_activa), fetch=False)
+                st.success(f"¡Feria '{nombre_feria_activa}' cerrada exitosamente!")
                 st.rerun()
             else:
                 st.info("No hay ventas abiertas para esta feria.")
@@ -274,57 +294,88 @@ with tab_feria:
     renderizar_catalogo(prods_db, origen_venta="FERIA", incluir_gachapon=True, key_prefix="feria", nombre_feria=nombre_feria_activa)
 
 # -----------------------------------------------------------------------------
-# 4. CAJA
+# 4. CAJA & CIERRES DE CICLO
 # -----------------------------------------------------------------------------
 with tab_caja:
-    st.header("💰 Estado de Caja")
+    st.header("💰 Estado de Caja y Cierre de Ciclos")
     
-    res_termas = consulta("SELECT SUM(subtotal) FROM ventas WHERE origen='TERMAS' AND cerrado = 0")
-    res_taller = consulta("SELECT SUM(subtotal) FROM ventas WHERE origen='TALLER' AND cerrado = 0")
-    res_feria = consulta("SELECT SUM(subtotal) FROM ventas WHERE origen='FERIA' AND cerrado = 0")
-    
-    tot_termas = float(res_termas[0][0]) if res_termas and res_termas[0][0] else 0.0
-    tot_taller = float(res_taller[0][0]) if res_taller and res_taller[0][0] else 0.0
-    tot_feria = float(res_feria[0][0]) if res_feria and res_feria[0][0] else 0.0
-    tot_general = tot_termas + tot_taller + tot_feria
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("🛒 CAJA TERMAS", f"${tot_termas:,.0f}")
-    c2.metric("🛠️ CAJA TALLER", f"${tot_taller:,.0f}")
-    c3.metric("🎪 CAJA FERIA", f"${tot_feria:,.0f}")
-    c4.metric("💵 TOTAL COMBINADO", f"${tot_general:,.0f}")
+    with st.expander("🔒 Realizar Cierre de Ciclo Actual (Termas & Taller)", expanded=True):
+        res_t_ab = consulta("SELECT SUM(subtotal), COUNT(*) FROM ventas WHERE origen IN ('TERMAS', 'TALLER') AND cerrado = 0")
+        tot_ab = float(res_t_ab[0][0]) if res_t_ab and res_t_ab[0][0] else 0.0
+        cnt_ab = int(res_t_ab[0][1]) if res_t_ab and res_t_ab[0][1] else 0
+        
+        ca1, ca2 = st.columns([3, 2])
+        with ca1:
+            etiqueta_ciclo = st.text_input("Nombre / Etiqueta del Ciclo a Cerrar:", value=f"Ciclo {datetime.now().strftime('%B %Y')}")
+            st.write(f"Monto Total Acumulado Abierto: **${tot_ab:,.0f}** ({cnt_ab} ventas)")
+        with ca2:
+            st.write("")
+            st.write("")
+            if st.button("🔒 Ejecutar Cierre de Ciclo", use_container_width=True):
+                if tot_ab > 0:
+                    min_f_ab = consulta("SELECT MIN(fecha) FROM ventas WHERE origen IN ('TERMAS', 'TALLER') AND cerrado = 0")[0][0]
+                    consulta("""
+                        INSERT INTO cierres_caja (tipo_cierre, etiqueta_ciclo, total_recaudado, total_operaciones, fecha_inicio, fecha_cierre)
+                        VALUES ('TERMAS_TALLER', %s, %s, %s, %s, %s)
+                    """, (etiqueta_ciclo, tot_ab, cnt_ab, min_f_ab, datetime.now()), fetch=False)
+                    
+                    id_c = consulta("SELECT MAX(id) FROM cierres_caja")[0][0]
+                    consulta("UPDATE ventas SET cerrado = 1, id_cierre = %s WHERE origen IN ('TERMAS', 'TALLER') AND cerrado = 0", (id_c,), fetch=False)
+                    st.success(f"¡Ciclo '{etiqueta_ciclo}' cerrado correctamente por ${tot_ab:,.0f}!")
+                    st.rerun()
+                else:
+                    st.info("No hay ventas abiertas para cerrar en Termas & Taller.")
 
     st.divider()
-    st.subheader("📊 Reporte de Stock Vendido por Feria (Guía de Carga / Reposición)")
-    
-    ferias_lista = consulta("SELECT DISTINCT nombre_feria FROM ventas WHERE origen='FERIA' ORDER BY nombre_feria ASC")
-    if ferias_lista:
-        feria_sel_reporte = st.selectbox("Seleccionar Feria para ver qué productos se vendieron:", [f[0] for f in ferias_lista])
+
+    st.subheader("📅 Consulta de Caja por Rango de Fechas")
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        fecha_desde = st.date_input("Fecha Desde:", value=date(date.today().year, date.today().month, 1))
+    with col_f2:
+        fecha_hasta = st.date_input("Fecha Hasta:", value=date.today())
+
+    ventas_rango = consulta("""
+        SELECT id, fecha, origen, nombre_feria, item_tipo, item_nombre, cantidad, precio_unitario, subtotal
+        FROM ventas
+        WHERE fecha >= %s AND fecha <= %s
+        ORDER BY fecha DESC
+    """, (datetime.combine(fecha_desde, datetime.min.time()), datetime.combine(fecha_hasta, datetime.max.time())))
+
+    tot_termas_r = sum(float(v[8]) for v in ventas_rango if v[2] == 'TERMAS') if ventas_rango else 0.0
+    tot_taller_r = sum(float(v[8]) for v in ventas_rango if v[2] == 'TALLER') if ventas_rango else 0.0
+    tot_feria_r = sum(float(v[8]) for v in ventas_rango if v[2] == 'FERIA') if ventas_rango else 0.0
+    tot_comb_r = tot_termas_r + tot_taller_r + tot_feria_r
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("🛒 TERMAS (En Rango)", f"${tot_termas_r:,.0f}")
+    m2.metric("🛠️ TALLER (En Rango)", f"${tot_taller_r:,.0f}")
+    m3.metric("🎪 FERIA (En Rango)", f"${tot_feria_r:,.0f}")
+    m4.metric("💵 TOTAL EN RANGO", f"${tot_comb_r:,.0f}")
+
+    if ventas_rango:
+        df_v_rango = pd.DataFrame(ventas_rango, columns=["ID", "Fecha", "Origen", "Feria", "Tipo", "Artículo", "Cantidad", "Precio Unitario ($)", "Subtotal ($)"])
         
-        ventas_feria_prod = consulta("""
-            SELECT item_nombre, SUM(cantidad) as unidades_vendidas, SUM(subtotal) as total_recaudado
-            FROM ventas 
-            WHERE origen='FERIA' AND nombre_feria = %s
-            GROUP BY item_nombre
-            ORDER BY unidades_vendidas DESC
-        """, (feria_sel_reporte,))
+        buffer_v = io.BytesIO()
+        with pd.ExcelWriter(buffer_v, engine='openpyxl') as writer:
+            df_v_rango.to_excel(writer, index=False, sheet_name='Reporte_Ventas')
         
-        if ventas_feria_prod:
-            df_v_feria = pd.DataFrame(ventas_feria_prod, columns=["Producto / Ficha", "Unidades Vendidas", "Total Recaudado ($)"])
-            st.dataframe(df_v_feria, use_container_width=True)
-            st.info("💡 Usá esta lista como referencia para saber qué productos reponer e incluir en el stock para la próxima edición de esta feria.")
-        else:
-            st.caption("No hay ventas registradas para la feria seleccionada.")
-    else:
-        st.caption("Aún no se han registrado ventas en ferias.")
+        st.download_button(
+            label="📥 Descargar Reporte de Ventas del Rango en Excel (.xlsx)",
+            data=buffer_v.getvalue(),
+            file_name=f"Reporte_Ventas_{fecha_desde}_al_{fecha_hasta}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+        st.dataframe(df_v_rango, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# 5. INVENTARIO
+# 5. INVENTARIO CON EXPORTACIÓN E IMPORTACIÓN CON FOTOS EN EXCEL
 # -----------------------------------------------------------------------------
 with tab_stock:
     st.header("📦 Inventario")
     
-    # 1. ALTAS DIRECCIONADAS MANUALES CON FOTO (SOPORTA PNG, JPG, JPEG)
+    # 1. ALTAS DIRECCIONADAS MANUALES CON FOTO
     with st.expander("➕ Dar de Alta Nuevo Producto o Premio Gachapon", expanded=False):
         tipo_alta = st.radio("¿Qué querés registrar?", ["Producto General", "Premio de Gachapon"], horizontal=True)
         
@@ -442,10 +493,68 @@ with tab_stock:
                     st.success(f"¡Precio de ficha para {col_e} actualizado a ${pf_nuevo:,.0f}!")
                     st.rerun()
 
-    # 3. IMPORTADOR MASIVO DESDE EXCEL
-    with st.expander("📥 Importar / Actualizar desde Excel (Stock Termas.xlsx)", expanded=False):
-        st.write("Subí tu archivo Excel para actualizar automáticamente productos generales y colecciones de Gachapon.")
-        archivo_excel = st.file_uploader("Seleccionar planilla (.xlsx o .xls):", type=["xlsx", "xls"], key="excel_uploader")
+    # 3. IMPORTAR / EXPORTAR INVENTARIO CON IMÁGENES DENTRO DEL EXCEL
+    with st.expander("📥 📤 Importar y Exportar Inventario Completo con Fotos en Excel", expanded=True):
+        st.write("Generá una planilla Excel con las fotos de los productos incrustadas en las celdas.")
+        
+        all_p = consulta("SELECT id, nombre, categoria, subgrupo, precio, stock, grupo, imagen_url FROM productos ORDER BY nombre ASC")
+        
+        def generar_excel_con_fotos(productos):
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Productos_Generales"
+            
+            headers = ["ID", "Foto", "Producto", "Categoría", "Subgrupo", "Precio Venta ($)", "Stock", "Grupo"]
+            ws.append(headers)
+            
+            ws.column_dimensions['B'].width = 15
+            
+            for idx, p in enumerate(productos, start=2):
+                p_id, p_nom, p_cat, p_sub, p_prec, p_stk, p_grp, p_img = p
+                ws.row_dimensions[idx].height = 55
+                
+                ws.cell(row=idx, column=1, value=p_id)
+                ws.cell(row=idx, column=3, value=p_nom)
+                ws.cell(row=idx, column=4, value=p_cat)
+                ws.cell(row=idx, column=5, value=p_sub)
+                ws.cell(row=idx, column=6, value=float(p_prec))
+                ws.cell(row=idx, column=7, value=int(p_stk))
+                ws.cell(row=idx, column=8, value=p_grp)
+                
+                if pd.notnull(p_img) and isinstance(p_img, str) and "base64," in p_img:
+                    try:
+                        header, encoded = p_img.split("base64,")
+                        img_bytes = base64.b64decode(encoded)
+                        pil_img = PILImage.open(io.BytesIO(img_bytes))
+                        pil_img.thumbnail((65, 65))
+                        
+                        img_buf = io.BytesIO()
+                        pil_img.save(img_buf, format="PNG")
+                        img_buf.seek(0)
+                        
+                        xl_img = OpenPyXLEImage(img_buf)
+                        ws.add_image(xl_img, f"B{idx}")
+                    except Exception:
+                        pass
+                        
+            buf = io.BytesIO()
+            wb.save(buf)
+            return buf.getvalue()
+
+        if all_p:
+            excel_con_fotos_bytes = generar_excel_con_fotos(all_p)
+            st.download_button(
+                label="📤 Exportar Inventario con Fotos a Excel (.xlsx)",
+                data=excel_con_fotos_bytes,
+                file_name=f"Inventario_Visual_{date.today()}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+        st.divider()
+        
+        # IMPORTADOR
+        archivo_excel = st.file_uploader("📥 Seleccionar planilla Excel para Sincronizar (.xlsx o .xls):", type=["xlsx", "xls"], key="excel_uploader")
         
         if archivo_excel is not None:
             if st.button("🚀 Sincronizar Base de Datos con Excel", use_container_width=True):
@@ -509,7 +618,7 @@ with tab_stock:
                                     """, (p_nombre, p_cat, p_grupo, p_precio, p_stock), fetch=False)
                                     cargados_prods += 1
                                 
-                    st.success(f"¡Éxito! Se actualizaron {cargados_prods} productos generales y {cargados_gach} premios/personajes de Gachapon.")
+                    st.success(f"¡Éxito! Se sincronizaron {cargados_prods} productos generales y {cargados_gach} premios de Gachapon.")
                     st.rerun()
                 except Exception as ex:
                     st.error(f"Error al procesar el archivo Excel: {ex}")
