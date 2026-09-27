@@ -396,8 +396,8 @@ with tab_stock:
                 else:
                     st.warning("Completá el nombre del personaje y la colección.")
 
-    # 2. CAMBIO DE PRECIOS Y STOCK
-    with st.expander("✏️ Cambiar Precios y Stock", expanded=False):
+    # 2. CAMBIO DE PRECIOS, STOCK Y FOTO
+    with st.expander("✏️ Cambiar Precios, Stock y Foto", expanded=False):
         tipo_precio = st.radio("Editar datos de:", ["Producto General", "Ficha/Colección Gachapon"], horizontal=True, key="edit_tipo_radio")
         
         if tipo_precio == "Producto General":
@@ -406,16 +406,27 @@ with tab_stock:
                 info_p = [p for p in prods_db if p[1] == p_edit][0]
                 val_act = info_p[3]
                 stock_act = info_p[4]
+                foto_act = info_p[5]
                 
                 cp1, cp2 = st.columns(2)
                 with cp1:
                     p_nuevo = st.number_input("Precio de Venta ($):", value=float(val_act), min_value=0.0, key=f"edit_p_{p_edit}")
-                with cp2:
                     s_nuevo = st.number_input("Stock Disponible (un.):", value=int(stock_act), min_value=0, key=f"edit_s_{p_edit}")
-                    
+                with cp2:
+                    if foto_act:
+                        st.image(foto_act, width=100, caption="Foto actual")
+                    else:
+                        st.caption("📷 *Sin foto asignada*")
+                    archivo_foto_edit = st.file_uploader("📷 Nueva Foto (dejar vacío para mantener la actual):", type=["jpg", "png", "jpeg"], key=f"foto_edit_{p_edit}")
+                
+                b64_foto_nueva = foto_act
+                if archivo_foto_edit is not None:
+                    bytes_data_ed = archivo_foto_edit.getvalue()
+                    b64_foto_nueva = f"data:image/jpeg;base64,{base64.b64encode(bytes_data_ed).decode()}"
+
                 if st.button("💾 Actualizar Producto", use_container_width=True, key="btn_actualizar_prod"):
-                    consulta("UPDATE productos SET precio = %s, stock = %s WHERE nombre = %s", (p_nuevo, s_nuevo, p_edit), fetch=False)
-                    st.success(f"¡Producto '{p_edit}' actualizado! Precio: ${p_nuevo:,.0f} | Stock: {s_nuevo} un.")
+                    consulta("UPDATE productos SET precio = %s, stock = %s, imagen_url = %s WHERE nombre = %s", (p_nuevo, s_nuevo, b64_foto_nueva, p_edit), fetch=False)
+                    st.success(f"¡Producto '{p_edit}' actualizado correctamente!")
                     st.rerun()
         else:
             colec_precios = consulta("SELECT DISTINCT coleccion, precio_ficha FROM gachapon_premios")
@@ -519,26 +530,6 @@ with tab_stock:
                     if n_cant_maq != int(row['en_maquina']):
                         consulta("UPDATE gachapon_premios SET en_maquina = %s WHERE id = %s", (n_cant_maq, row['id']), fetch=False)
             st.caption("Los cambios de stock se guardan en tiempo real al modificar los números.")
-
-    st.divider()
-
-    # 5. MÓDULO PARA CARGAR / CAMBIAR FOTO
-    st.subheader("🖼️ Asignar / Cambiar Foto a un Producto Existente")
-    if prods_db:
-        prod_foto = st.selectbox("Seleccionar producto para agregarle foto:", [p[1] for p in prods_db])
-        id_prod = [p[0] for p in prods_db if p[1] == prod_foto][0]
-        
-        archivo_imagen = st.file_uploader("Cargar imagen (JPG, PNG) desde la PC o tomar foto con el Celular:", type=["jpg", "png", "jpeg"])
-        
-        if archivo_imagen is not None:
-            bytes_data = archivo_imagen.getvalue()
-            b64_img = f"data:image/jpeg;base64,{base64.b64encode(bytes_data).decode()}"
-            st.image(bytes_data, width=150, caption="Vista previa de miniatura")
-            
-            if st.button("💾 Guardar Foto del Producto", use_container_width=True):
-                consulta("UPDATE productos SET imagen_url = %s WHERE id = %s", (b64_img, id_prod), fetch=False)
-                st.success(f"¡Foto guardada correctamente para {prod_foto}!")
-                st.rerun()
 
     st.divider()
     st.subheader("📋 Lista Completa de Stock General")
