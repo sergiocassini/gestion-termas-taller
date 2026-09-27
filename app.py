@@ -294,37 +294,64 @@ with tab_feria:
     renderizar_catalogo(prods_db, origen_venta="FERIA", incluir_gachapon=True, key_prefix="feria", nombre_feria=nombre_feria_activa)
 
 # -----------------------------------------------------------------------------
-# 4. CAJA & CIERRES DE CICLO
+# 4. CAJA & CIERRES DE CICLO (CON SELECTOR DE CAJA)
 # -----------------------------------------------------------------------------
 with tab_caja:
     st.header("💰 Estado de Caja y Cierre de Ciclos")
     
-    with st.expander("🔒 Realizar Cierre de Ciclo Actual (Termas & Taller)", expanded=True):
-        res_t_ab = consulta("SELECT SUM(subtotal), COUNT(*) FROM ventas WHERE origen IN ('TERMAS', 'TALLER') AND cerrado = 0")
-        tot_ab = float(res_t_ab[0][0]) if res_t_ab and res_t_ab[0][0] else 0.0
-        cnt_ab = int(res_t_ab[0][1]) if res_t_ab and res_t_ab[0][1] else 0
+    with st.expander("🔒 Realizar Cierre de Ciclo Específico", expanded=True):
+        caja_a_cerrar = st.selectbox(
+            "Seleccionar la Caja que querés cerrar:",
+            ["🛒 Solo Termas", "🛠️ Solo Taller", "🏪 Termas + Taller (Ambos)", "🎪 Feria Específica"],
+            key="sel_caja_cierre"
+        )
         
+        # Filtros de consulta según la opción elegida
+        if caja_a_cerrar == "🛒 Solo Termas":
+            where_clause = "origen = 'TERMAS' AND cerrado = 0"
+            params_where = ()
+            tipo_db = "TERMAS"
+        elif caja_a_cerrar == "🛠️ Solo Taller":
+            where_clause = "origen = 'TALLER' AND cerrado = 0"
+            params_where = ()
+            tipo_db = "TALLER"
+        elif caja_a_cerrar == "🏪 Termas + Taller (Ambos)":
+            where_clause = "origen IN ('TERMAS', 'TALLER') AND cerrado = 0"
+            params_where = ()
+            tipo_db = "TERMAS_TALLER"
+        else: # Feria Específica
+            ferias_abiertas = consulta("SELECT DISTINCT nombre_feria FROM ventas WHERE origen = 'FERIA' AND cerrado = 0")
+            lista_fa = [f[0] for f in ferias_abiertas] if ferias_abiertas else ["Feria Dolores"]
+            feria_sel_cierre = st.selectbox("Seleccionar Feria a cerrar:", lista_fa, key="sel_feria_especifica")
+            where_clause = "origen = 'FERIA' AND nombre_feria = %s AND cerrado = 0"
+            params_where = (feria_sel_cierre,)
+            tipo_db = f"FERIA: {feria_sel_cierre}"
+
+        res_cierre_sel = consulta(f"SELECT SUM(subtotal), COUNT(*) FROM ventas WHERE {where_clause}", params_where)
+        tot_sel = float(res_cierre_sel[0][0]) if res_cierre_sel and res_cierre_sel[0][0] else 0.0
+        cnt_sel = int(res_cierre_sel[0][1]) if res_cierre_sel and res_cierre_sel[0][1] else 0
+
         ca1, ca2 = st.columns([3, 2])
         with ca1:
-            etiqueta_ciclo = st.text_input("Nombre / Etiqueta del Ciclo a Cerrar:", value=f"Ciclo {datetime.now().strftime('%B %Y')}")
-            st.write(f"Monto Total Acumulado Abierto: **${tot_ab:,.0f}** ({cnt_ab} ventas)")
+            etiqueta_ciclo = st.text_input("Nombre / Etiqueta del Ciclo a Cerrar:", value=f"Ciclo {caja_a_cerrar} - {datetime.now().strftime('%B %Y')}")
+            st.write(f"Monto Total Acumulado Abierto: **${tot_sel:,.0f}** ({cnt_sel} ventas)")
         with ca2:
             st.write("")
             st.write("")
             if st.button("🔒 Ejecutar Cierre de Ciclo", use_container_width=True):
-                if tot_ab > 0:
-                    min_f_ab = consulta("SELECT MIN(fecha) FROM ventas WHERE origen IN ('TERMAS', 'TALLER') AND cerrado = 0")[0][0]
+                if tot_sel > 0:
+                    min_f_sel = consulta(f"SELECT MIN(fecha) FROM ventas WHERE {where_clause}", params_where)[0][0]
                     consulta("""
                         INSERT INTO cierres_caja (tipo_cierre, etiqueta_ciclo, total_recaudado, total_operaciones, fecha_inicio, fecha_cierre)
-                        VALUES ('TERMAS_TALLER', %s, %s, %s, %s, %s)
-                    """, (etiqueta_ciclo, tot_ab, cnt_ab, min_f_ab, datetime.now()), fetch=False)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (tipo_db, etiqueta_ciclo, tot_sel, cnt_sel, min_f_sel, datetime.now()), fetch=False)
                     
                     id_c = consulta("SELECT MAX(id) FROM cierres_caja")[0][0]
-                    consulta("UPDATE ventas SET cerrado = 1, id_cierre = %s WHERE origen IN ('TERMAS', 'TALLER') AND cerrado = 0", (id_c,), fetch=False)
-                    st.success(f"¡Ciclo '{etiqueta_ciclo}' cerrado correctamente por ${tot_ab:,.0f}!")
+                    consulta(f"UPDATE ventas SET cerrado = 1, id_cierre = %s WHERE {where_clause}", (id_c,) + params_where, fetch=False)
+                    st.success(f"¡Cierre '{etiqueta_ciclo}' realizado con éxito por ${tot_sel:,.0f}!")
                     st.rerun()
                 else:
-                    st.info("No hay ventas abiertas para cerrar en Termas & Taller.")
+                    st.info(f"No hay ventas abiertas en {caja_a_cerrar} para cerrar.")
 
     st.divider()
 
