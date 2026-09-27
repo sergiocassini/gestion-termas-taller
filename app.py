@@ -51,8 +51,10 @@ def init_db():
         consulta("ALTER TABLE productos ADD COLUMN IF NOT EXISTS imagen_url TEXT;", fetch=False)
         consulta("ALTER TABLE productos ADD COLUMN IF NOT EXISTS grupo VARCHAR(100);", fetch=False)
         consulta("ALTER TABLE productos ADD COLUMN IF NOT EXISTS subgrupo VARCHAR(100) DEFAULT 'Varios';", fetch=False)
+        consulta("ALTER TABLE productos ADD COLUMN IF NOT EXISTS costo_insumos NUMERIC DEFAULT 0;", fetch=False)
         consulta("ALTER TABLE gachapon_premios ADD COLUMN IF NOT EXISTS coleccion VARCHAR(100) DEFAULT 'Zooki';", fetch=False)
         consulta("ALTER TABLE gachapon_premios ADD COLUMN IF NOT EXISTS precio_ficha NUMERIC DEFAULT 2000;", fetch=False)
+        consulta("ALTER TABLE gachapon_premios ADD COLUMN IF NOT EXISTS costo_insumos NUMERIC DEFAULT 0;", fetch=False)
         consulta("ALTER TABLE ventas ADD COLUMN IF NOT EXISTS nombre_feria VARCHAR(150) DEFAULT 'General';", fetch=False)
     except Exception:
         pass
@@ -65,6 +67,7 @@ def init_db():
             grupo VARCHAR(100),
             subgrupo VARCHAR(100) DEFAULT 'Varios',
             precio NUMERIC DEFAULT 0,
+            costo_insumos NUMERIC DEFAULT 0,
             stock INT DEFAULT 0,
             stock_minimo INT DEFAULT 1,
             imagen_url TEXT
@@ -78,6 +81,7 @@ def init_db():
             stock_deposito INT DEFAULT 0,
             en_maquina INT DEFAULT 0,
             precio_ficha NUMERIC DEFAULT 2000,
+            costo_insumos NUMERIC DEFAULT 0,
             imagen_url TEXT
         );
         CREATE TABLE IF NOT EXISTS ventas (
@@ -122,7 +126,7 @@ def renderizar_catalogo(prods, origen_venta, incluir_gachapon=False, key_prefix=
     busqueda = st.text_input("🔍 Buscador rápido de producto (nombre o categoría):", key=f"busqueda_{key_prefix}")
     
     if prods:
-        df_prods = pd.DataFrame(prods, columns=["id", "nombre", "categoria", "precio", "stock", "imagen_url", "grupo"])
+        df_prods = pd.DataFrame(prods, columns=["id", "nombre", "categoria", "precio", "stock", "imagen_url", "grupo", "costo_insumos"])
         df_prods['grupo_final'] = df_prods.apply(lambda r: r['grupo'] if (r['grupo'] and r['grupo'] != '📦 Varios y Novedades') else obtener_grupo(r['categoria'], r['nombre']), axis=1)
         
         if busqueda:
@@ -222,7 +226,7 @@ tab_termas, tab_taller, tab_feria, tab_caja, tab_stock = st.tabs([
     "📦 Inventario"
 ])
 
-prods_db = consulta("SELECT id, nombre, categoria, precio, stock, imagen_url, grupo FROM productos ORDER BY nombre ASC")
+prods_db = consulta("SELECT id, nombre, categoria, precio, stock, imagen_url, grupo, costo_insumos FROM productos ORDER BY nombre ASC")
 
 # -----------------------------------------------------------------------------
 # 1. VENTAS TERMAS
@@ -314,7 +318,7 @@ with tab_caja:
 with tab_stock:
     st.header("📦 Inventario")
     
-    # 1. ALTAS DIRECCIONADAS MANUALES
+    # 1. ALTAS DIRECCIONADAS CON INTEGRACIÓN DE FOTO E INSUMOS
     with st.expander("➕ Dar de Alta Nuevo Producto o Premio Gachapon", expanded=False):
         tipo_alta = st.radio("¿Qué querés registrar?", ["Producto General", "Premio de Gachapon"], horizontal=True)
         
@@ -330,18 +334,26 @@ with tab_stock:
                     "📦 Varios y Novedades"
                 ])
                 nueva_cat = st.text_input("Categoría o Subgrupo (ej: Clubes, Anti-estrés):", value="General")
+                nuevo_costo = st.number_input("Costo de Insumos ($):", min_value=0.0, value=0.0)
             with col_a2:
-                nuevo_precio = st.number_input("Precio ($):", min_value=0.0, value=1000.0)
+                nuevo_precio = st.number_input("Precio de Venta ($):", min_value=0.0, value=1000.0)
                 nuevo_stock = st.number_input("Stock Inicial:", min_value=0, value=1)
+                archivo_foto_alta = st.file_uploader("📷 Foto de Producto (opcional):", type=["jpg", "png", "jpeg"], key="foto_alta_prod")
             
+            b64_img_alta = None
+            if archivo_foto_alta is not None:
+                bytes_data = archivo_foto_alta.getvalue()
+                b64_img_alta = f"data:image/jpeg;base64,{base64.b64encode(bytes_data).decode()}"
+                st.image(bytes_data, width=120, caption="Vista previa de miniatura")
+
             if st.button("💾 Guardar Nuevo Producto", use_container_width=True):
                 if nuevo_nombre:
                     try:
                         consulta("""
-                            INSERT INTO productos (nombre, grupo, categoria, subgrupo, precio, stock) 
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                        """, (nuevo_nombre, nuevo_grupo, nueva_cat, nueva_cat, nuevo_precio, nuevo_stock), fetch=False)
-                        st.success(f"¡Producto '{nuevo_nombre}' agregado correctamente!")
+                            INSERT INTO productos (nombre, grupo, categoria, subgrupo, precio, costo_insumos, stock, imagen_url) 
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (nuevo_nombre, nuevo_grupo, nueva_cat, nueva_cat, nuevo_precio, nuevo_costo, nuevo_stock, b64_img_alta), fetch=False)
+                        st.success(f"¡Producto '{nuevo_nombre}' agregado correctamente con su foto e insumos!")
                         st.rerun()
                     except Exception as ex:
                         st.error(f"Error al guardar: {ex}")
@@ -364,36 +376,55 @@ with tab_stock:
                 else:
                     g_colec = g_colec_sel
                     g_precio_ficha = 2000.0
+                g_costo_ins = st.number_input("Costo de Insumos por Muñeco ($):", min_value=0.0, value=0.0)
             with col_g2:
                 g_en_maq = st.number_input("Cantidad Inicial en Máquina:", min_value=0, value=1)
                 g_en_dep = st.number_input("Cantidad Inicial en Depósito:", min_value=0, value=0)
-            
+                archivo_foto_gach = st.file_uploader("📷 Foto del Personaje (opcional):", type=["jpg", "png", "jpeg"], key="foto_alta_gach")
+
+            b64_img_gach = None
+            if archivo_foto_gach is not None:
+                bytes_data_g = archivo_foto_gach.getvalue()
+                b64_img_gach = f"data:image/jpeg;base64,{base64.b64encode(bytes_data_g).decode()}"
+                st.image(bytes_data_g, width=120, caption="Vista previa de miniatura")
+
             if st.button("💾 Guardar Personaje Gachapon", use_container_width=True):
                 if g_nombre and g_colec:
                     try:
                         consulta("""
-                            INSERT INTO gachapon_premios (numero, nombre, coleccion, en_maquina, stock_deposito, precio_ficha) 
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                        """, (g_num, g_nombre, g_colec, g_en_maq, g_en_dep, g_precio_ficha), fetch=False)
-                        st.success(f"¡Personaje '{g_nombre}' guardado en la colección '{g_colec}'!")
+                            INSERT INTO gachapon_premios (numero, nombre, coleccion, en_maquina, stock_deposito, precio_ficha, costo_insumos, imagen_url) 
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (g_num, g_nombre, g_colec, g_en_maq, g_en_dep, g_precio_ficha, g_costo_ins, b64_img_gach), fetch=False)
+                        st.success(f"¡Personaje '{g_nombre}' guardado en la colección '{g_colec}' con su foto!")
                         st.rerun()
                     except Exception as ex:
                         st.error(f"Error al guardar: {ex}")
                 else:
                     st.warning("Completá el nombre del personaje y la colección.")
 
-    # 2. CAMBIO DE PRECIOS
-    with st.expander("✏️ Cambiar Precios (Productos o Fichas Gachapon)", expanded=False):
-        tipo_precio = st.radio("Editar precio de:", ["Producto General", "Ficha de Colección Gachapon"], horizontal=True)
+    # 2. CAMBIO DE PRECIOS, COSTO DE INSUMOS Y STOCK
+    with st.expander("✏️ Cambiar Precios, Costo de Insumos y Stock", expanded=False):
+        tipo_precio = st.radio("Editar datos de:", ["Producto General", "Ficha/Colección Gachapon"], horizontal=True)
         
         if tipo_precio == "Producto General":
             if prods_db:
                 p_edit = st.selectbox("Seleccionar Producto:", [p[1] for p in prods_db], key="sel_p_e")
-                val_act = [p[3] for p in prods_db if p[1] == p_edit][0]
-                p_nuevo = st.number_input(f"Nuevo Precio para {p_edit} ($):", value=float(val_act), min_value=0.0)
-                if st.button("💾 Actualizar Precio Producto", use_container_width=True):
-                    consulta("UPDATE productos SET precio = %s WHERE nombre = %s", (p_nuevo, p_edit), fetch=False)
-                    st.success(f"¡Precio de {p_edit} actualizado a ${p_nuevo:,.0f}!")
+                info_p = [p for p in prods_db if p[1] == p_edit][0]
+                val_act = info_p[3]
+                stock_act = info_p[4]
+                costo_act = info_p[7] if len(info_p) > 7 and info_p[7] else 0.0
+                
+                cp1, cp2, cp3 = st.columns(3)
+                with cp1:
+                    p_nuevo = st.number_input(f"Precio de Venta ($):", value=float(val_act), min_value=0.0)
+                with cp2:
+                    c_nuevo = st.number_input(f"Costo de Insumos ($):", value=float(costo_act), min_value=0.0)
+                with cp3:
+                    s_nuevo = st.number_input(f"Stock Disponibles (un.):", value=int(stock_act), min_value=0)
+                    
+                if st.button("💾 Actualizar Producto", use_container_width=True):
+                    consulta("UPDATE productos SET precio = %s, costo_insumos = %s, stock = %s WHERE nombre = %s", (p_nuevo, c_nuevo, s_nuevo, p_edit), fetch=False)
+                    st.success(f"¡Producto '{p_edit}' actualizado! Precio: ${p_nuevo:,.0f} | Insumos: ${c_nuevo:,.0f} | Stock: {s_nuevo} un.")
                     st.rerun()
         else:
             colec_precios = consulta("SELECT DISTINCT coleccion, precio_ficha FROM gachapon_premios")
@@ -422,7 +453,6 @@ with tab_stock:
                         df_sheet = pd.read_excel(archivo_excel, sheet_name=sheet)
                         df_sheet.columns = [str(c).strip().lower() for c in df_sheet.columns]
                         
-                        # Si la hoja corresponde a Gachapon (Zookis, Minecraft, etc.)
                         is_gachapon = any(k in sheet.lower() for k in ['zooki', 'minecraft', 'gachapon', 'premio']) or \
                                       any('impresos' in c or 'deposito' in c or 'maquina' in c for c in df_sheet.columns)
                         
@@ -450,7 +480,6 @@ with tab_stock:
                                     """, (g_num, g_nom, sheet, g_dep, g_maq), fetch=False)
                                     cargados_gach += 1
                         else:
-                            # Hoja de Productos Generales
                             col_nombre = next((c for c in df_sheet.columns if 'producto' in c or 'nombre' in c or 'item' in c), None)
                             col_precio = next((c for c in df_sheet.columns if 'precio' in c or 'valor' in c), None)
                             col_stock = next((c for c in df_sheet.columns if 'stock' in c or 'cantidad' in c or 'cant' in c), None)
@@ -502,8 +531,8 @@ with tab_stock:
 
     st.divider()
 
-    # 5. MÓDULO PARA CARGAR FOTO
-    st.subheader("🖼️ Asignar / Cambiar Foto a un Producto")
+    # 5. MÓDULO PARA CARGAR / CAMBIAR FOTO
+    st.subheader("🖼️ Asignar / Cambiar Foto a un Producto Existente")
     if prods_db:
         prod_foto = st.selectbox("Seleccionar producto para agregarle foto:", [p[1] for p in prods_db])
         id_prod = [p[0] for p in prods_db if p[1] == prod_foto][0]
@@ -522,7 +551,7 @@ with tab_stock:
 
     st.divider()
     st.subheader("📋 Lista Completa de Stock General")
-    prods_full = consulta("SELECT id, nombre, grupo, categoria, precio, stock FROM productos ORDER BY nombre ASC")
+    prods_full = consulta("SELECT id, nombre, grupo, categoria, precio, costo_insumos, stock FROM productos ORDER BY nombre ASC")
     if prods_full:
-        df_stock = pd.DataFrame(prods_full, columns=["ID", "Producto", "Grupo", "Categoría", "Precio", "Stock"])
+        df_stock = pd.DataFrame(prods_full, columns=["ID", "Producto", "Grupo", "Categoría", "Precio Venta", "Costo Insumos", "Stock"])
         st.dataframe(df_stock, use_container_width=True)
