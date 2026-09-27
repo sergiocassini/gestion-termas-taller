@@ -45,6 +45,15 @@ def consulta(query, params=(), fetch=True):
     conn.close()
     return res
 
+# --- HELPER PARA MIGRAR / PROCESAR IMÁGENES DIVERSAS (PNG, JPG, ETC) ---
+def procesar_archivo_imagen(archivo_subido):
+    if archivo_subido is None:
+        return None
+    bytes_data = archivo_subido.getvalue()
+    mime_type = archivo_subido.type if archivo_subido.type else "image/png"
+    b64_str = base64.b64encode(bytes_data).decode('utf-8')
+    return f"data:{mime_type};base64,{b64_str}"
+
 # --- INICIALIZACIÓN Y AUTO-MIGRACIÓN ---
 def init_db():
     try:
@@ -147,8 +156,9 @@ def renderizar_catalogo(prods, origen_venta, incluir_gachapon=False, key_prefix=
                     col = cols[idx % 3]
                     with col:
                         st.markdown("---")
-                        if row['imagen_url']:
-                            st.image(row['imagen_url'], use_container_width=True)
+                        img_val = row['imagen_url']
+                        if pd.notnull(img_val) and isinstance(img_val, str) and img_val.startswith('data:image'):
+                            st.image(img_val, use_container_width=True)
                         else:
                             st.caption("📷 *Sin foto miniatura*")
                         
@@ -314,7 +324,7 @@ with tab_caja:
 with tab_stock:
     st.header("📦 Inventario")
     
-    # 1. ALTAS DIRECCIONADAS MANUALES CON FOTO
+    # 1. ALTAS DIRECCIONADAS MANUALES CON FOTO (SOPORTA PNG, JPG, JPEG)
     with st.expander("➕ Dar de Alta Nuevo Producto o Premio Gachapon", expanded=False):
         tipo_alta = st.radio("¿Qué querés registrar?", ["Producto General", "Premio de Gachapon"], horizontal=True)
         
@@ -333,13 +343,11 @@ with tab_stock:
             with col_a2:
                 nuevo_precio = st.number_input("Precio de Venta ($):", min_value=0.0, value=1000.0, key="alta_precio_prod")
                 nuevo_stock = st.number_input("Stock Inicial:", min_value=0, value=1, key="alta_stock_prod")
-                archivo_foto_alta = st.file_uploader("📷 Foto de Producto (opcional):", type=["jpg", "png", "jpeg"], key="foto_alta_prod")
+                archivo_foto_alta = st.file_uploader("📷 Foto de Producto (PNG, JPG, JPEG):", type=["png", "jpg", "jpeg", "webp"], key="foto_alta_prod")
             
-            b64_img_alta = None
-            if archivo_foto_alta is not None:
-                bytes_data = archivo_foto_alta.getvalue()
-                b64_img_alta = f"data:image/jpeg;base64,{base64.b64encode(bytes_data).decode()}"
-                st.image(bytes_data, width=120, caption="Vista previa de miniatura")
+            b64_img_alta = procesar_archivo_imagen(archivo_foto_alta)
+            if b64_img_alta:
+                st.image(archivo_foto_alta, width=120, caption="Vista previa de miniatura")
 
             if st.button("💾 Guardar Nuevo Producto", use_container_width=True):
                 if nuevo_nombre:
@@ -374,13 +382,11 @@ with tab_stock:
             with col_g2:
                 g_en_maq = st.number_input("Cantidad Inicial en Máquina:", min_value=0, value=1, key="alta_maq_gach")
                 g_en_dep = st.number_input("Cantidad Inicial en Depósito:", min_value=0, value=0, key="alta_dep_gach")
-                archivo_foto_gach = st.file_uploader("📷 Foto del Personaje (opcional):", type=["jpg", "png", "jpeg"], key="foto_alta_gach")
+                archivo_foto_gach = st.file_uploader("📷 Foto del Personaje (PNG, JPG, JPEG):", type=["png", "jpg", "jpeg", "webp"], key="foto_alta_gach")
 
-            b64_img_gach = None
-            if archivo_foto_gach is not None:
-                bytes_data_g = archivo_foto_gach.getvalue()
-                b64_img_gach = f"data:image/jpeg;base64,{base64.b64encode(bytes_data_g).decode()}"
-                st.image(bytes_data_g, width=120, caption="Vista previa de miniatura")
+            b64_img_gach = procesar_archivo_imagen(archivo_foto_gach)
+            if b64_img_gach:
+                st.image(archivo_foto_gach, width=120, caption="Vista previa de miniatura")
 
             if st.button("💾 Guardar Personaje Gachapon", use_container_width=True):
                 if g_nombre and g_colec:
@@ -413,16 +419,13 @@ with tab_stock:
                     p_nuevo = st.number_input("Precio de Venta ($):", value=float(val_act), min_value=0.0, key=f"edit_p_{p_edit}")
                     s_nuevo = st.number_input("Stock Disponible (un.):", value=int(stock_act), min_value=0, key=f"edit_s_{p_edit}")
                 with cp2:
-                    if foto_act:
+                    if pd.notnull(foto_act) and isinstance(foto_act, str) and foto_act.startswith('data:image'):
                         st.image(foto_act, width=100, caption="Foto actual")
                     else:
                         st.caption("📷 *Sin foto asignada*")
-                    archivo_foto_edit = st.file_uploader("📷 Nueva Foto (dejar vacío para mantener la actual):", type=["jpg", "png", "jpeg"], key=f"foto_edit_{p_edit}")
+                    archivo_foto_edit = st.file_uploader("📷 Nueva Foto (PNG, JPG, JPEG):", type=["png", "jpg", "jpeg", "webp"], key=f"foto_edit_{p_edit}")
                 
-                b64_foto_nueva = foto_act
-                if archivo_foto_edit is not None:
-                    bytes_data_ed = archivo_foto_edit.getvalue()
-                    b64_foto_nueva = f"data:image/jpeg;base64,{base64.b64encode(bytes_data_ed).decode()}"
+                b64_foto_nueva = procesar_archivo_imagen(archivo_foto_edit) if archivo_foto_edit is not None else foto_act
 
                 if st.button("💾 Actualizar Producto", use_container_width=True, key="btn_actualizar_prod"):
                     consulta("UPDATE productos SET precio = %s, stock = %s, imagen_url = %s WHERE nombre = %s", (p_nuevo, s_nuevo, b64_foto_nueva, p_edit), fetch=False)
